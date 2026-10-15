@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Advanced Calculus Calculator</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      color: #172033;
+      background: #f1f5f9;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; padding: 36px 18px; }
+    main {
+      width: min(720px, 100%);
+      margin: 0 auto;
+      padding: 30px;
+      background: #fff;
+      border: 1px solid #dce4ee;
+      border-radius: 18px;
+      box-shadow: 0 14px 40px #17203312;
+    }
+    h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); }
+    .intro { margin: 8px 0 24px; color: #526078; line-height: 1.5; }
+    label { display: block; margin: 14px 0 6px; font-weight: 650; }
+    input, select {
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 12px;
+      border: 1px solid #bbc8d8;
+      border-radius: 8px;
+      background: #fff;
+      color: inherit;
+      font: inherit;
+    }
+    input:focus, select:focus, button:focus-visible {
+      outline: 3px solid #93c5fd;
+      outline-offset: 2px;
+      border-color: #2563eb;
+    }
+    .expression-help, .footnote { color: #5b6679; font-size: .9rem; line-height: 1.5; }
+    .values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+    .field[hidden] { display: none; }
+    button {
+      width: 100%;
+      min-height: 46px;
+      margin-top: 20px;
+      border: 0;
+      border-radius: 9px;
+      background: #155eef;
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { background: #124bc2; }
+    .result {
+      min-height: 54px;
+      margin-top: 16px;
+      padding: 14px;
+      border-radius: 9px;
+      background: #eff6ff;
+      color: #15356b;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .result.error { background: #fff1f2; color: #9f1239; }
+    .footnote { margin: 18px 0 0; }
+    @media (max-width: 520px) {
+      body { padding: 16px 10px; }
+      main { padding: 20px 16px; }
+      .values { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Advanced Calculus Calculator</h1>
+    <p class="intro">A browser-based calculus toolkit. No installation, account, or administrator access needed.</p>
+
+    <form id="calculator">
+      <label for="expression">Function f(x)</label>
+      <input id="expression" name="expression" value="sin(x)" autocomplete="off" spellcheck="false" required>
+      <div class="expression-help">
+        Use x, pi, e, +, -, *, /, ^ or **, parentheses, and functions such as sin(x), log(x), or sqrt(x).
+        Trigonometric functions use radians.
+      </div>
+
+      <label for="operation">Operation</label>
+      <select id="operation" name="operation">
+        <option>Evaluate</option>
+        <option selected>Differentiate</option>
+        <option>Definite integral</option>
+        <option>Solve f(x) = 0</option>
+        <option>Two-sided limit</option>
+        <option>Taylor polynomial</option>
+      </select>
+
+      <div class="values">
+        <div class="field" data-field="x">
+          <label for="x">x / limit point</label>
+          <input id="x" type="number" step="any" value="1">
+        </div>
+        <div class="field" data-field="a">
+          <label for="a">a / interval start / center</label>
+          <input id="a" type="number" step="any" value="0">
+        </div>
+        <div class="field" data-field="b">
+          <label for="b">b / interval end</label>
+          <input id="b" type="number" step="any" value="1">
+        </div>
+        <div class="field" data-field="degree">
+          <label for="degree">Taylor degree (0-12)</label>
+          <input id="degree" type="number" min="0" max="12" step="1" value="3">
+        </div>
+      </div>
+      <button type="submit">Calculate</button>
+    </form>
+
+    <div id="result" class="result" role="status" aria-live="polite">Ready. Enter an expression and choose an operation.</div>
+    <p class="footnote">
+      Numerical integration, limits, and roots are approximations. They may not work reliably for discontinuous or singular functions.
+      This app covers standard calculus and is not a verified implementation of any particular author's theories.
+    </p>
+  </main>
+
+  <script>
+    "use strict";
+
+    const functions = {
+      sin: Math.sin, cos: Math.cos, tan: Math.tan,
+      asin: Math.asin, acos: Math.acos, atan: Math.atan,
+      sinh: Math.sinh, cosh: Math.cosh, tanh: Math.tanh,
+      exp: Math.exp, log: Math.log, ln: Math.log, log10: Math.log10, sqrt: Math.sqrt
+    };
+    const constants = { pi: Math.PI, e: Math.E };
+
+    function tokenize(source) {
+      const tokens = [];
+      let position = 0;
+      while (position < source.length) {
+        if (/\s/.test(source[position])) {
+          position++;
+          continue;
+        }
+        const rest = source.slice(position);
+        const number = rest.match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/i);
+        const name = rest.match(/^[a-zA-Z_]\w*/);
+        if (number) {
+          tokens.push({ type: "number", value: Number(number[0]) });
+          position += number[0].length;
+        } else if (name) {
+          tokens.push({ type: "name", value: name[0].toLowerCase() });
+          position += name[0].length;
+        } else if (source.startsWith("**", position)) {
+          tokens.push({ type: "operator", value: "^" });
+          position += 2;
+        } else if ("+-*/^(),".includes(source[position])) {
+          tokens.push({ type: "operator", value: source[position] });
+          position++;
+        } else {
+          throw new Error("Unexpected character: " + source[position]);
+        }
+      }
+      tokens.push({ type: "end", value: "" });
+      return tokens;
+    }
+
+    function parse(source) {
+      const tokens = tokenize(source);
+      let index = 0;
+      const current = () => tokens[index];
+      const consume = value => {
+        if (current().value !== value) throw new Error("Expected '" + value + "'.");
+        return tokens[index++];
+      };
+      function expression(minBinding = 0) {
+        const token = tokens[index++];
+        let left;
+        if (token.type === "number") {
+          left = { type: "number", value: token.value };
+        } else if (token.type === "name") {
+          if (token.value === "x" || Object.hasOwn(constants, token.value)) {
+            left = { type: "name", name: token.value };
+          } else if (Object.hasOwn(functions, token.value)) {
+            consume("(");
+            const arg = expression();
+            consume(")");
+            left = { type: "call", name: token.value, arg };
+          } else {
+            throw new Error("Unknown name: " + token.value);
+          }
+        } else if (token.value === "+" || token.value === "-") {
+          left = { type: "unary", op: token.value, arg: expression(25) };
+        } else if (token.value === "(") {
+          left = expression();
+          consume(")");
+        } else {
+          throw new Error("Expected a number, x, function, or parenthesized expression.");
+        }
+
+        while (current().type === "operator") {
+          const op = current().value;
+          const binding = op === "+" || op === "-" ? 10 :
+            op === "*" || op === "/" ? 20 : op === "^" ? 30 : -1;
+          if (binding < minBinding) break;
+          index++;
+          const right = expression(binding + (op === "^" ? 0 : 1));
+          left = { type: "binary", op, left, right };
+        }
+        return left;
+      }
+      if (!source.trim()) throw new Error("Enter a mathematical expression.");
+      const tree = expression();
+      if (current().type !== "end") throw new Error("Unexpected input: " + current().value);
+      return tree;
+    }
+
+    function evaluateNode(node, x) {
+      let value;
+      if (node.type === "number") return node.value;
+      if (node.type === "name") return node.name === "x" ? x : constants[node.name];
+      if (node.type === "unary") {
+        value = evaluateNode(node.arg, x);
+        return node.op === "-" ? -value : value;
+      }
+      if (node.type === "call") return functions[node.name](evaluateNode(node.arg, x));
+      const left = evaluateNode(node.left, x);
+      const right = evaluateNode(node.right, x);
+      switch (node.op) {
+        case "+": return left + right;
+        case "-": return left - right;
+        case "*": return left * right;
+        case "/": return left / right;
+        case "^": return left ** right;
+        default: throw new Error("Unsupported operation.");
+      }
+    }
+
+    function finite(value, context = "The result") {
+      if (!Number.isFinite(value)) throw new Error(context + " is not finite.");
+      return value;
+    }
+    function num(value) { return { type: "number", value }; }
+    function variable() { return { type: "name", name: "x" }; }
+    function bin(op, left, right) {
+      if (op === "+" && isNum(left, 0)) return right;
+      if (op === "+" && isNum(right, 0)) return left;
+      if (op === "-" && isNum(right, 0)) return left;
+      if (op === "*" && (isNum(left, 0) || isNum(right, 0))) return num(0);
+      if (op === "*" && isNum(left, 1)) return right;
+      if (op === "*" && isNum(right, 1)) return left;
+      if (op === "/" && isNum(left, 0)) return num(0);
+      if (op === "/" && isNum(right, 1)) return left;
+      if (op === "^" && isNum(right, 0)) return num(1);
+      if (op === "^" && isNum(right, 1)) return left;
+      return { type: "binary", op, left, right };
+    }
+    function isNum(node, value) { return node.type === "number" && node.value === value; }
+    function call(name, arg) { return { type: "call", name, arg }; }
+    function neg(node) { return node.type === "unary" && node.op === "-" ? node.arg : { type: "unary", op: "-", arg: node }; }
+
+    function differentiate(node) {
+      const zero = num(0), one = num(1);
+      if (node.type === "number") return zero;
+      if (node.type === "name") return node.name === "x" ? one : zero;
+      if (node.type === "unary") {
+        const d = differentiate(node.arg);
+        return node.op === "-" ? neg(d) : d;
+      }
+      if (node.type === "binary") {
+        const u = node.left, v = node.right;
+        const du = differentiate(u), dv = differentiate(v);
+        if (node.op === "+") return bin("+", du, dv);
+        if (node.op === "-") return bin("-", du, dv);
+        if (node.op === "*") return bin("+", bin("*", du, v), bin("*", u, dv));
+        if (node.op === "/") return bin("/", bin("-", bin("*", du, v), bin("*", u, dv)), bin("^", v, num(2)));
+        if (node.op === "^") {
+          if (v.type === "number") return bin("*", bin("*", v, bin("^", u, num(v.value - 1))), du);
+          return bin("*", node, bin("+", bin("*", dv, call("log", u)), bin("*", v, bin("/", du, u))));
+        }
+      }
+      if (node.type === "call") {
+        const u = node.arg, du = differentiate(u);
+        let outer;
+        switch (node.name) {
+          case "sin": outer = call("cos", u); break;
+          case "cos": outer = neg(call("sin", u)); break;
+          case "tan": outer = bin("/", one, bin("^", call("cos", u), num(2))); break;
+          case "asin": outer = bin("/", one, call("sqrt", bin("-", one, bin("^", u, num(2))))); break;
+          case "acos": outer = neg(bin("/", one, call("sqrt", bin("-", one, bin("^", u, num(2)))))); break;
+          case "atan": outer = bin("/", one, bin("+", one, bin("^", u, num(2)))); break;
+          case "sinh": outer = call("cosh", u); break;
+          case "cosh": outer = call("sinh", u); break;
+          case "tanh": outer = bin("/", one, bin("^", call("cosh", u), num(2))); break;
+          case "exp": outer = call("exp", u); break;
+          case "log":
+          case "ln": outer = bin("/", one, u); break;
+          case "log10": outer = bin("/", one, bin("*", u, call("log", num(10)))); break;
+          case "sqrt": outer = bin("/", one, bin("*", num(2), call("sqrt", u))); break;
+          default: throw new Error("No derivative rule for " + node.name + ".");
+        }
+        return bin("*", outer, du);
+      }
+      throw new Error("Could not differentiate this expression.");
+    }
+
+    function precedence(node) {
+      if (node.type === "binary") return node.op === "+" || node.op === "-" ? 10 :
+        node.op === "*" || node.op === "/" ? 20 : 30;
+      if (node.type === "unary") return 25;
+      return 40;
+    }
+    function format(node, parent = 0, rightSide = false, parentOp = "") {
+      let text;
+      if (node.type === "number") text = Number(node.value.toPrecision(12)).toString();
+      else if (node.type === "name") text = node.name;
+      else if (node.type === "call") text = node.name + "(" + format(node.arg) + ")";
+      else if (node.type === "unary") text = node.op + format(node.arg, precedence(node));
+      else {
+        const p = precedence(node);
+        const left = format(node.left, p, false, node.op);
+        const right = format(node.right, p, true, node.op);
+        text = left + " " + node.op + " " + right;
+        const sameNeedsParens = rightSide &&
+          ((parentOp === "-" && (node.op === "+" || node.op === "-")) ||
+           (parentOp === "/" && (node.op === "*" || node.op === "/")) ||
+           (parentOp === "^" && node.op !== "^"));
+        if (p < parent || sameNeedsParens || (node.op === "^" && !rightSide && parentOp === "^")) {
+          return "(" + text + ")";
+        }
+        return text;
+      }
+      return precedence(node) < parent ? "(" + text + ")" : text;
+    }
+
+    function integrate(source, a, b, tolerance = 1e-9) {
+      finite(a, "Integration bound"); finite(b, "Integration bound");
+      if (a === b) return 0;
+      if (a > b) return -integrate(source, b, a, tolerance);
+      const tree = parse(source);
+      const f = x => finite(evaluateNode(tree, x), "Integrand");
+      const mid = (a + b) / 2, fa = f(a), fm = f(mid), fb = f(b);
+      const whole = (b - a) * (fa + 4 * fm + fb) / 6;
+      function refine(left, right, fl, fc, fr, estimate, tol, depth) {
+        const center = (left + right) / 2;
+        const lm = (left + center) / 2, rm = (center + right) / 2;
+        const flm = f(lm), frm = f(rm);
+        const leftEst = (center - left) * (fl + 4 * flm + fc) / 6;
+        const rightEst = (right - center) * (fc + 4 * frm + fr) / 6;
+        const combined = leftEst + rightEst;
+        if (Math.abs(combined - estimate) <= 15 * tol) return combined + (combined - estimate) / 15;
+        if (depth <= 0) throw new Error("Integration did not converge; try a smoother interval.");
+        return refine(left, center, fl, flm, fc, leftEst, tol / 2, depth - 1) +
+          refine(center, right, fc, frm, fr, rightEst, tol / 2, depth - 1);
+      }
+      return finite(refine(a, b, fa, fm, fb, whole, tolerance, 22), "Integral");
+    }
+
+    function root(source, a, b, tolerance = 1e-10) {
+      finite(a, "Interval bound"); finite(b, "Interval bound");
+      const tree = parse(source);
+      let fa = finite(evaluateNode(tree, a), "Function at interval start");
+      let fb = finite(evaluateNode(tree, b), "Function at interval end");
+      if (fa === 0) return a;
+      if (fb === 0) return b;
+      if (fa * fb > 0) throw new Error("The interval endpoints must bracket a root.");
+      for (let i = 0; i < 200; i++) {
+        const mid = (a + b) / 2, fm = finite(evaluateNode(tree, mid), "Function value");
+        if (Math.abs(fm) <= tolerance || Math.abs(b - a) / 2 <= tolerance) return mid;
+        if (fa * fm < 0) { b = mid; fb = fm; }
+        else { a = mid; fa = fm; }
+      }
+      throw new Error("Root finding did not converge within the iteration limit.");
+    }
+
+    function oneSidedLimit(tree, point, direction) {
+      const samples = [];
+      for (let exponent = 2; exponent <= 8; exponent++) {
+        const value = evaluateNode(tree, point + direction * (10 ** -exponent));
+        if (!Number.isFinite(value)) return null;
+        samples.push(value);
+      }
+      const recent = samples.slice(-4);
+      const mean = recent.reduce((sum, value) => sum + value, 0) / recent.length;
+      const spread = Math.max(...recent) - Math.min(...recent);
+      return spread <= 1e-5 * (1 + Math.abs(mean)) ? mean : null;
+    }
+    function limit(source, point) {
+      finite(point, "Limit point");
+      const tree = parse(source);
+      let left, right;
+      try { left = oneSidedLimit(tree, point, -1); } catch (_) { left = null; }
+      try { right = oneSidedLimit(tree, point, 1); } catch (_) { right = null; }
+      if (left === null || right === null) {
+        throw new Error("A finite, stable two-sided limit could not be established numerically.");
+      }
+      if (Math.abs(left - right) > 1e-5 * (1 + Math.max(Math.abs(left), Math.abs(right)))) {
+        throw new Error("The left-hand and right-hand limits do not agree.");
+      }
+      return (left + right) / 2;
+    }
+
+    function taylor(source, center, degree) {
+      finite(center, "Taylor center");
+      if (!Number.isInteger(degree) || degree < 0 || degree > 12) {
+        throw new Error("Taylor degree must be an integer from 0 to 12.");
+      }
+      let tree = parse(source);
+      const terms = [];
+      let factorial = 1;
+      for (let order = 0; order <= degree; order++) {
+        if (order > 0) factorial *= order;
+        const coefficient = finite(evaluateNode(tree, center) / factorial, "Taylor coefficient");
+        if (Math.abs(coefficient) > 1e-14) {
+          terms.push(format(num(coefficient)) + " * (x - " + format(num(center)) + ")^" + order);
+        }
+        if (order < degree) tree = differentiate(tree);
+      }
+      return terms.length ? terms.join(" + ") : "0";
+    }
+
+    const fields = {
+      x: document.querySelector('[data-field="x"]'),
+      a: document.querySelector('[data-field="a"]'),
+      b: document.querySelector('[data-field="b"]'),
+      degree: document.querySelector('[data-field="degree"]')
+    };
+    const operation = document.getElementById("operation");
+    const form = document.getElementById("calculator");
+    const result = document.getElementById("result");
+    function updateFields() {
+      const visible = {
+        "Evaluate": ["x"],
+        "Differentiate": [],
+        "Definite integral": ["a", "b"],
+        "Solve f(x) = 0": ["a", "b"],
+        "Two-sided limit": ["x"],
+        "Taylor polynomial": ["a", "degree"]
+      }[operation.value];
+      for (const [name, element] of Object.entries(fields)) {
+        element.hidden = !visible.includes(name);
+        const input = element.querySelector("input");
+        input.required = visible.includes(name);
+      }
+    }
+    function readNumber(name) {
+      const input = document.getElementById(name);
+      if (input.value.trim() === "") throw new Error("Enter a value for " + name + ".");
+      const value = Number(input.value);
+      if (!Number.isFinite(value)) throw new Error("Enter a finite number for " + name + ".");
+      return value;
+    }
+    operation.addEventListener("change", updateFields);
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      result.classList.remove("error");
+      try {
+        const source = document.getElementById("expression").value;
+        const selected = operation.value;
+        let output;
+        if (selected === "Evaluate") output = finite(evaluateNode(parse(source), readNumber("x")));
+        else if (selected === "Differentiate") output = "f'(x) = " + format(differentiate(parse(source)));
+        else if (selected === "Definite integral") output = integrate(source, readNumber("a"), readNumber("b"));
+        else if (selected === "Solve f(x) = 0") output = "x = " + root(source, readNumber("a"), readNumber("b"));
+        else if (selected === "Two-sided limit") output = limit(source, readNumber("x"));
+        else if (selected === "Taylor polynomial") output = taylor(source, readNumber("a"), readNumber("degree"));
+        result.textContent = typeof output === "number" ? Number(output.toPrecision(12)).toString() : output;
+      } catch (error) {
+        result.textContent = error.message || "Calculation failed.";
+        result.classList.add("error");
+      }
+    });
+    updateFields();
+  </script>
+</body>
+</html>
